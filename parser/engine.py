@@ -3,18 +3,22 @@ from curl_cffi.requests import AsyncSession
 from camoufox.async_api import AsyncCamoufox
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
+import re
+import unicodedata
 from parser.clear_url import clear_avito_url
 from config.config import settings
 
 
 
 class AvitoParser:
+    #инициализируем proxy и режим работы браузера "headless" (с открытием граф. окна или без)
     def __init__(self, proxy: str | None = None, headless: bool = True):
         self.proxy = proxy
         self.headless = headless
         self.browser_manager = None
         self.browser = None
 
+    #метод формирования proxy, который принимает camoufox
     def proxy_config(self) -> dict | None:
         if not self.proxy:
             return None
@@ -29,6 +33,7 @@ class AvitoParser:
 
         return proxy_dict
     
+    #метод инициализации сессии браузера
     async def start(self):
         self.browser_manager = AsyncCamoufox(
             headless=self.headless,
@@ -40,13 +45,16 @@ class AvitoParser:
 
         self.browser = await self.browser_manager.__aenter__()
 
+    #метод закрытия и отчистки контекстов браузера
     async def close(self):
         if self.browser_manager:
             await self.browser_manager.__aexit__(None, None, None)
             self.browser_manager = None
             self.browser = None
 
+    #метод для получения html страницы
     async def get_page_html(self, url: str) -> str | None:
+        #если браузер закрыт, инициализируем его
         if not self.browser:
             await self.start()
 
@@ -54,11 +62,14 @@ class AvitoParser:
 
         try:
             async def block_heavy_resources(route):
+                #не даем загружать картинки, видео и тд, чтоб загрузка шла быстрее
                 if route.request.resource_type in ["image","media","font"]:
                     await route.abort()
                     return
 
                 url = route.request.url.lower()
+
+                #не даем Avito анализировать сайты перечисленные в списке, для более быстрой загрузки
                 heavy_domains = ["mc.yandex.ru", "google-analytics.com", "yandex.ru/clck", "top-fwz1.mail.ru"]
 
                 if any(domain in url for domain in heavy_domains):
@@ -72,9 +83,10 @@ class AvitoParser:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
             try:
+                #ожидаем появление карточки товара на странице, только тогда забираем html код
                 await page.wait_for_selector('div[data-marker="item"]')
             except Exception:
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(3000)
 
             title = await page.title()
             print(f"Успешное подлючение, заголовок страницы: {title}")
@@ -88,27 +100,88 @@ class AvitoParser:
             return None
         
         finally:
+            #закрываем страницу, чтобы не случилось
             await page.close()
 
+    #метод для отчистки текста
+    @staticmethod
+    def clean_text(text: str | None, max_length: int | None = None) -> str | None:
+        if not text:
+            return None
+        
+        normalized = unicodedata.normalize("NFKD",text)
+        text_normalized = " ".join(normalized.split())
+
+        #если текст будет больше заявленной длинны укорачиваем
+        if max_length is None or len(text_normalized) <= max_length:
+            return text_normalized
+        
+        modification_text = text_normalized[:max_length].rsplit(" ", 1)[0]
+
+        return f"{modification_text}..."
+    
     def parse_items(self, html: str | None):
+        if not html:
+            return []
+        
         soup = BeautifulSoup(html, "html.parser")
 
+        #находим все карточки товаров на странице
         cards = soup.find_all("div", attrs={"data-marker" : "item"})
 
-        print(f"Найдено карточек : {len(cards)}")
+        items = []
+        for card in cards:
 
+            #достаем название
+            title_block = card.find("div",class_=re.compile("^titleStep"))
+            raw_title = title_block.get_text(strip=True) if title_block else "Название отсутствует"
+            title = self.clean_text(raw_title)
+
+            #достаем цену товара
+            price_meta = card.find("meta",attrs={"itemprop" : "price"})
+            price = int(price_meta["content"]) if price_meta and price_meta.get("content") else None
+  
+            #достаем описание карточки
+            desc_block = card.find("div", class_=re.compile("^bottomBlock"))
+            raw_desc = desc_block.get_text(strip=True) if desc_block else "Описание отсутствует" 
+            description = self.clean_text(raw_desc, 150)
+            
+            #достаем id товара
+            item_id = card.get("data-item-id")
+
+            #достаем ссылку на товар
+            link_tag = card.find("a", attrs={"data-marker" : "item-title"})
+            url = f"https://www.avito.ru{link_tag.get('href')}" if link_tag and link_tag.get("href") else None
+
+            #укорачиваем ссылку на товар
+            short_url = clear_avito_url(url) if url else None
+
+            #формируем список словарей с данными
+            items.append({
+                "id" : item_id,
+                "title" : title,
+                "price" : price,
+                "description" : description,
+                "url" : short_url
+            })
+
+        #возращаем собранные данные
+        return items
+    
 async def main():
 
     proxy_url = settings.PROXY_ROTATION
-    avito_url = "https://www.avito.ru/izhevsk/odezhda_obuv_aksessuary?q=джинсы"
+    avito_url = "https://www.avito.ru/izhevsk/avtomobili?cd=1&context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6IkNOaElyeU44M1NXUkxQbXEiO30tPYIhJgAAAA&localPriority=0&radius=200&searchRadius=200"
 
     parser = AvitoParser(proxy=proxy_url, headless=False)
 
     try:
         html = await parser.get_page_html(avito_url)
+
         if html:
             print("html получен")
-            print(html)
+            parsing = parser.parse_items(html)
+
     finally:
         await parser.close()
 if __name__ == "__main__":
