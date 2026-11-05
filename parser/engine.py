@@ -1,12 +1,13 @@
-import asyncio
 from curl_cffi.requests import AsyncSession
 from camoufox.async_api import AsyncCamoufox
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-import re
-import unicodedata
 from parser.clear_url import clear_avito_url
 from config.config import settings
+import unicodedata
+import asyncio
+import re
+
 
 
 
@@ -169,20 +170,8 @@ class AvitoParser:
         return items
     
 async def main():
+    parser = AvitoParser(proxy=settings.PROXY_ROTATION, headless=False)
+    await parser.get_page_html("https://www.avito.ru/izhevsk?q=кро")
 
-    proxy_url = settings.PROXY_ROTATION
-    avito_url = "https://www.avito.ru/izhevsk/avtomobili?cd=1&context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6IkNOaElyeU44M1NXUkxQbXEiO30tPYIhJgAAAA&localPriority=0&radius=200&searchRadius=200"
-
-    parser = AvitoParser(proxy=proxy_url, headless=False)
-
-    try:
-        html = await parser.get_page_html(avito_url)
-
-        if html:
-            print("html получен")
-            parsing = parser.parse_items(html)
-
-    finally:
-        await parser.close()
 if __name__ == "__main__":
     asyncio.run(main())
