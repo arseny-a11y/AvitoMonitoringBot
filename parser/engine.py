@@ -1,4 +1,3 @@
-from curl_cffi.requests import AsyncSession
 from camoufox.async_api import AsyncCamoufox
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
@@ -13,7 +12,7 @@ import re
 
 class AvitoParser:
     #инициализируем proxy и режим работы браузера "headless" (с открытием граф. окна или без)
-    def __init__(self, proxy: str | None = None, headless: bool = True):
+    def __init__(self, proxy: str | None = None, headless: bool = False):
         self.proxy = proxy
         self.headless = headless
         self.browser_manager = None
@@ -36,8 +35,11 @@ class AvitoParser:
     
     #метод инициализации сессии браузера
     async def start(self):
+       
         self.browser_manager = AsyncCamoufox(
             headless=self.headless,
+            humanize=True,
+            window=(1920,1080),
             geoip=True,
             proxy=self.proxy_config(),
             os="windows",
@@ -49,9 +51,13 @@ class AvitoParser:
     #метод закрытия и отчистки контекстов браузера
     async def close(self):
         if self.browser_manager:
-            await self.browser_manager.__aexit__(None, None, None)
-            self.browser_manager = None
-            self.browser = None
+            try:
+                await self.browser_manager.__aexit__(None, None, None)
+            except Exception:
+                pass
+            finally:
+                self.browser_manager = None
+                self.browser = None
 
     #метод для получения html страницы
     async def get_page_html(self, url: str) -> str | None:
@@ -64,16 +70,16 @@ class AvitoParser:
         try:
             async def block_heavy_resources(route):
                 #не даем загружать картинки, видео и тд, чтоб загрузка шла быстрее
-                if route.request.resource_type in ["image","media","font"]:
+                if route.request.resource_type in ["image","media"]:
                     await route.abort()
                     return
 
-                url = route.request.url.lower()
+                req_url = route.request.url.lower()
 
                 #не даем Avito анализировать сайты перечисленные в списке, для более быстрой загрузки
                 heavy_domains = ["mc.yandex.ru", "google-analytics.com", "yandex.ru/clck", "top-fwz1.mail.ru"]
 
-                if any(domain in url for domain in heavy_domains):
+                if any(domain in req_url for domain in heavy_domains):
                     await route.abort()
                     return
                 
@@ -81,7 +87,7 @@ class AvitoParser:
                 
             await page.route("**/*", block_heavy_resources)
 
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            await page.goto(url, wait_until="commit", timeout=10000)
 
             try:
                 #ожидаем появление карточки товара на странице, только тогда забираем html код
@@ -169,9 +175,5 @@ class AvitoParser:
         #возращаем собранные данные
         return items
     
-async def main():
-    parser = AvitoParser(proxy=settings.PROXY_ROTATION, headless=False)
-    await parser.get_page_html("https://www.avito.ru/izhevsk?q=кро")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+parser = AvitoParser(proxy=settings.PROXY_ROTATION)

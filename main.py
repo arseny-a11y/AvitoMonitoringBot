@@ -1,11 +1,13 @@
 from aiogram import Dispatcher,Bot
 from aiogram.client.session.aiohttp import AiohttpSession
 from config.config import settings
-from bot.handlers.base import base_router
+from bot.handlers.monitor import monitor_router
 from database.database import init_db
 import logging
 import asyncio
+import warnings
 
+warnings.filterwarnings("ignore", category=ResourceWarning, message="unclosed transport")
 
 async def main():
     logging.basicConfig(level=logging.INFO)
@@ -14,11 +16,10 @@ async def main():
 
     bot = Bot(settings.TOKEN, session=session)
     dp = Dispatcher()
-    dp.startup.register()
 
     await init_db()
 
-    dp.include_router(base_router)
+    dp.include_router(monitor_router)
 
     try:
         print("Бот запущен!")

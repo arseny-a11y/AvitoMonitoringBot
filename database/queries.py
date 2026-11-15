@@ -5,12 +5,12 @@ from sqlalchemy import select
 #функция для записи собранных данный в БД
 async def save_items(items: list[dict]):
     if not items:
-        return 
+        return []
 
     items_id = [item.get("id") for item in items if item.get("id") is not None]
 
     if not items_id:
-        return
+        return []
     
     async with async_session_factory() as session:
         items_in_db = (await session.scalars(select(CollectedData).where(CollectedData.item_id.in_(items_id)))).all()
@@ -35,9 +35,10 @@ async def save_items(items: list[dict]):
             )
 
         if not new_data:
-            return
+            return []
 
-        async with session.begin():
-            session.add_all(new_data)
-
+        
+        session.add_all(new_data)
+        await session.commit()
+        
         return new_data
